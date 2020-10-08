@@ -31,7 +31,7 @@ class Node(object):
         return f'<Node {self.name}{index}>'
 
     def parse(self, text:str,
-              full:bool=True):
+              full:bool=True)->int:
         r"""parse from text fully or partially from head"""
 
         m = (Node.REGEX.fullmatch if full else Node.REGEX.match)(text)
@@ -80,7 +80,7 @@ class NodeWithPredicates(Node):
         return f'<NodeWithPredicates {self.name}{index}{predicates}>'
 
     def parse(self, text:str,
-              full:bool=True):
+              full:bool=True)->int:
         pos = super().parse(text, full=False)
         text_ = text[pos:].lstrip()
         predicates = []
@@ -168,7 +168,7 @@ class Path(object):
         return self.nodes[i]
 
     def parse(self, text:str,
-              full:bool=True):
+              full:bool=True)->int:
         r"""parse from text fully or partially from head"""
 
         text_ = text
@@ -241,7 +241,7 @@ class NodeGroup(object):
         return self.nodes[i]
 
     def parse(self, text:str,
-              full:bool=True):
+              full:bool=True)->int:
         r"""parse from text fully or partially from head"""
 
         if not text:
@@ -310,7 +310,7 @@ class Predicate(object):
     subclasses :'Seqeunce[type]' = []
 
     def parse(self, text:str,
-              full:bool=True):
+              full:bool=True)->int:
         r"""parse from text fully or partially from head"""
 
         for cls in Predicate.subclasses:
@@ -342,7 +342,7 @@ class HasAttrPredicate(Predicate):
         return f'<HasAttr {prefix}{self.attr_path}>'
 
     def parse(self, text:str,
-              full:bool=True):
+              full:bool=True)->int:
         if not text:
             raise YPathSyntaxError(f'invalid {type(self).__name__} syntax: {text!r}')
         text_ = text
@@ -387,7 +387,7 @@ class MatchAttrPredicate(Predicate):
         return f'<MatchAttr {self.attr_path} {self.operator} {self.target}>'
 
     def parse(self, text:str,
-              full:bool=True):
+              full:bool=True)->int:
         self.attr_path = Path(seperator='.')
         pos = self.attr_path.parse(text, full=False)
         text_ = text[pos:].lstrip()
