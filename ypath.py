@@ -16,6 +16,30 @@ from quick_prototxt import load_prototxt
 class YPathSyntaxError(Exception):
     r"""SyntaxError for YPath"""
 
+    token_type :type
+    text       :str
+    problem    :'Optional[str]' = None
+    position   :'Optional[int]' = None
+
+    def __init__(self, token_type:type, text:str,
+                 problem:'Optional[str]'=None, position:'Optional[int]'=None):
+        self.token_type = token_type
+        self.text = text
+        self.problem = problem
+        self.position = position
+
+    def __str__(self)->str:
+        newline = '\n' + ' ' * 4
+        s0 = f'invalid {self.token_type.__name__} syntax:'
+        s1 = "'" + self.text + "'"
+
+        if self.problem is None or self.position is None:
+            return s0 + ' ' + s1
+
+        s2 = ' ' * self.position
+        s3 = f' ^ {self.problem}'
+        return s0 + newline + s1 + newline + s2 + s3
+
 
 class Node(object):
     r"""node in path"""
@@ -36,7 +60,7 @@ class Node(object):
 
         m = (Node.REGEX.fullmatch if full else Node.REGEX.match)(text)
         if not m:
-            raise YPathSyntaxError(f'invalid {type(self).__name__} syntax: {text!r}')
+            raise YPathSyntaxError(Node, text)
 
         self.name, index = m.groups()
         self.index = index and int(index)
@@ -65,7 +89,7 @@ class Node(object):
 
 # @inherit_docs
 class NodeWithPredicates(Node):
-    r"""'Node' with 'Predicates'"""
+    r"""single_node: the 'Node' with 'Predicates'"""
 
     PREDICATES_BEGIN     :str = r'('
     PREDICATES_END       :str = r')'
@@ -89,14 +113,13 @@ class NodeWithPredicates(Node):
             if started:
                 if not text_:
                     raise YPathSyntaxError(
-                        f'invalid {type(self).__name__} syntax: '
-                        f'trailing predicates in {text!r}')
+                        NodeWithPredicates, text, 'trailing predicates', len(text))
                 if text_[0] == NodeWithPredicates.PREDICATES_END:
                     text_ = text_[1:]
                     if full and text_:
                         raise YPathSyntaxError(
-                            f'invalid {type(self).__name__} syntax: '
-                            f'unexpected token at {len(text) - len(text_)} in {text!r}')
+                            NodeWithPredicates, text,
+                            'unexpected token', len(text) - len(text_))
                     break
                 elif text_[0] == NodeWithPredicates.PREDICATES_DELIMITER:
                     text_ = text_[1:].lstrip()
@@ -106,8 +129,7 @@ class NodeWithPredicates(Node):
                     text_ = text_[pos:].lstrip()
                     continue
                 raise YPathSyntaxError(
-                    f'invalid {type(self).__name__} syntax: '
-                    f'unexpected token at {len(text) - len(text_)} in {text!r}')
+                    NodeWithPredicates, text, 'unexpected token', len(text) - len(text_))
             else:
                 if not text_:
                     break
@@ -121,8 +143,7 @@ class NodeWithPredicates(Node):
                     continue
                 if full:
                     raise YPathSyntaxError(
-                        f'invalid {type(self).__name__} syntax: '
-                        f'unexpected token at {len(text) - len(text_)} in {text!r}')
+                        NodeWithPredicates, text, 'unexpected token', len(text) - len(text_))
                 break
         self.predicates = tuple(predicates)
         return len(text) - len(text_)
@@ -146,7 +167,7 @@ class NodeWithPredicates(Node):
 
 
 class Path(object):
-    r"""a hierarchy of 'NodeWithPredicates's"""
+    r"""predicate_path: a hierarchy of 'NodeWithPredicates's"""
 
     NodeClass :type = NodeWithPredicates
 
@@ -173,25 +194,28 @@ class Path(object):
 
         text_ = text
         nodes = []
+        exception = None
         while True:
-            text_ = text_.lstrip(self.seperator).lstrip()
             if not text_:
                 break
+            text__ = text_.lstrip(self.seperator).lstrip() # buggy
             node = self.NodeClass()
             try:
-                pos = node.parse(text_, full=False)
-            except YPathSyntaxError:
+                pos = node.parse(text__, full=False)
+            except YPathSyntaxError as e:
+                exception = e
                 break
             else:
                 nodes.append(node)
-                text_ = text_[pos:].lstrip()
+                text_ = text__[pos:].lstrip()
 
         if not nodes:
-            raise YPathSyntaxError(f'invalid {type(self).__name__} syntax: {text!r}')
+            raise YPathSyntaxError(Path, text, 'node expected', len(text) - len(text_))
         if full and text_:
-            raise YPathSyntaxError(
-                f'invalid {type(self).__name__} syntax: '
-                f'unexpected token at {len(text) - len(text_)} in {text!r}')
+            if exception is None:
+                raise YPathSyntaxError(Path, text, 'unexpected token', len(text) - len(text_))
+            else:
+                raise exception
 
         self.nodes = tuple(nodes)
         return len(text) - len(text_)
@@ -219,7 +243,7 @@ class Path(object):
 
 
 class NodeGroup(object):
-    r"""single 'Node' or a group of 'YPath's"""
+    r"""node_group: single 'Node' or a group of 'YPath's"""
 
     NODES_BEGIN     :str = r'{'
     NODES_END       :str = r'}'
@@ -245,7 +269,7 @@ class NodeGroup(object):
         r"""parse from text fully or partially from head"""
 
         if not text:
-            raise YPathSyntaxError(f'invalid {type(self).__name__} syntax: {text!r}')
+            raise YPathSyntaxError(NodeGroup, text)
 
         text_ = text
         nodes = []
@@ -257,20 +281,17 @@ class NodeGroup(object):
                 nodes.append(node)
                 text_ = text_[pos:].lstrip()
                 if not text_:
-                    raise YPathSyntaxError(
-                        f'invalid {type(self).__name__} syntax: trailing nodes in {text!r}')
+                    raise YPathSyntaxError(NodeGroup, text, 'trailing nodes', len(text))
                 if text_[0] == NodeGroup.NODES_END:
                     text_ = text_[1:]
                     if full and text_:
                         raise YPathSyntaxError(
-                            f'invalid {type(self).__name__} syntax: '
-                            f'unexpected token at {len(text) - len(text_)} in {text!r}')
+                            NodeGroup, text, 'unexpected token', len(text) - len(text_))
                     break
                 elif text_[0] == NodeGroup.NODES_DELIMITER:
                     continue
                 raise YPathSyntaxError(
-                    f'invalid {type(self).__name__} syntax: '
-                    f'unexpected token at {len(text) - len(text_)} in {text!r}')
+                    NodeGroup, text, 'unexpected token', len(text) - len(text_))
         else:
             node = self.NodeClass()
             pos = node.parse(text_, full=full)
@@ -294,7 +315,7 @@ class NodeGroup(object):
 
 # @inherit_docs
 class YPath(Path):
-    r"""'Path' with group support"""
+    r"""ypath: 'Path' with group support"""
 
     NodeClass :type = NodeGroup
 
@@ -305,7 +326,7 @@ NodeGroup.PathClass = YPath
 
 
 class Predicate(object):
-    r"""the 'Node' filter"""
+    r"""predicate: the 'Node' filter"""
 
     subclasses :'Seqeunce[type]' = []
 
@@ -322,7 +343,7 @@ class Predicate(object):
                 self.__class__ = cls
                 return ret
 
-        raise YPathSyntaxError(f'invalid {type(self).__name__} syntax: {text!r}')
+        raise YPathSyntaxError(Predicate, text)
 
     def match(self, mapping:'Mapping[str, Any]')->bool:
         r"""test if a node should be filtered"""
@@ -344,7 +365,7 @@ class HasAttrPredicate(Predicate):
     def parse(self, text:str,
               full:bool=True)->int:
         if not text:
-            raise YPathSyntaxError(f'invalid {type(self).__name__} syntax: {text!r}')
+            raise YPathSyntaxError(HasAttrPredicate, text)
         text_ = text
         if text_[0] == '!':
             self.inversed = True
@@ -392,7 +413,7 @@ class MatchAttrPredicate(Predicate):
         pos = self.attr_path.parse(text, full=False)
         text_ = text[pos:].lstrip()
         if not text_:
-            raise YPathSyntaxError(f'invalid {type(self).__name__} syntax: {text!r}')
+            raise YPathSyntaxError(MatchAttrPredicate, text, 'operator expected', len(text))
 
         for operator, func in MatchAttrPredicate.OPERATORS.items():
             if text_.startswith(operator):
@@ -402,11 +423,10 @@ class MatchAttrPredicate(Predicate):
                 break
         else:
             raise YPathSyntaxError(
-                f'invalid {type(self).__name__} syntax: '
-                f'unexpected operator at {len(text) - len(text_)} in {text!r}')
+                MatchAttrPredicate, text, 'invalid operator', len(text) - len(text_))
 
         if not text_:
-            raise YPathSyntaxError(f'invalid {type(self).__name__} syntax: {text!r}')
+            raise YPathSyntaxError(MatchAttrPredicate, text, 'target expected', len(text))
 
         if text_[0] in '"\'':
             quote = text_[0]
@@ -424,8 +444,7 @@ class MatchAttrPredicate(Predicate):
                     pos += 1
                     break
             if quote:
-                raise YPathSyntaxError(
-                    f'invalid {type(self).__name__} syntax: trailing target in {text!r}')
+                raise YPathSyntaxError(MatchAttrPredicate, text, 'trailing target', len(text))
 
             target = text_[:pos]
             text_ = text_[pos:]
@@ -433,8 +452,7 @@ class MatchAttrPredicate(Predicate):
             m = MatchAttrPredicate.REGEX_TARGET.match(text_)
             if not m:
                 raise YPathSyntaxError(
-                    f'invalid {type(self).__name__} syntax: '
-                    f'invalid target at {len(text) - len(text_)} in {text!r}')
+                    MatchAttrPredicate, text, 'invalid target', len(text) - len(text_))
 
             target = m.group()
             text_ = text_[m.end():]
@@ -491,3 +509,16 @@ if __name__ == '__main__':
     path = YPath()
     path.parse('/{/proxy/node(x==1), node(x>1)}')
     print(path.collect({'proxy': {'node': {'x': 1}}, 'node': {'x': 2}}))
+
+    try:
+        path.parse('/a/')
+    except YPathSyntaxError as e:
+        print(e)
+    else:
+        raise AssertionError('unexpected success')
+    try:
+        path.parse('a/b{x,y/z}')
+    except YPathSyntaxError as e:
+        print(e)
+    else:
+        raise AssertionError('unexpected success')
