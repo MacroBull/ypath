@@ -29,7 +29,6 @@ class YPathSyntaxError(Exception):
         self.position = position
 
     def __str__(self)->str:
-        newline = '\n' + ' ' * 4
         s0 = f'invalid {self.token_type.__name__} syntax:'
         s1 = "'" + self.text + "'"
 
@@ -38,11 +37,12 @@ class YPathSyntaxError(Exception):
 
         s2 = ' ' * self.position
         s3 = f' ^ {self.problem}'
+        newline = '\n    '
         return s0 + newline + s1 + newline + s2 + s3
 
 
 class Node(object):
-    r"""node in path"""
+    r"""node: a basic field in a struct"""
 
     PATTERN :str          = r'([a-zA-Z]\w*)(?:\s*@\s*([\-\+]?\d+))?'
     REGEX   :'re.Pattern' = re.compile(PATTERN)
@@ -85,6 +85,86 @@ class Node(object):
         else:
             ret = ret if isinstance(ret, list) else [ret]
         return [{self.name: r} for r in ret] if with_name else ret
+
+
+class Path(object):
+    r"""path: a hierarchy of nested 'Node's"""
+
+    NodeClass :type = Node
+
+    nodes     :'Sequence[NodeClass]'
+    seperator :str
+
+    def __init__(self,
+                 seperator:str='/'):
+        self.seperator = seperator
+
+    def __repr__(self)->str:
+        nodes = ', '.join(map(str, self.nodes))
+        return f'<Path seperated with {self.seperator} {nodes}>'
+
+    def __iter__(self)->'Iterator':
+        return iter(self.nodes)
+
+    def __getitem__(self, i:int)->NodeClass:
+        return self.nodes[i]
+
+    def parse(self, text:str,
+              full:bool=True)->int:
+        r"""parse from text fully or partially from head"""
+
+        text_ = text
+        nodes = []
+        exception = None
+        while True:
+            if not text_:
+                break
+            if nodes and not text_.startswith(self.seperator): # permit first omission
+                exception = YPathSyntaxError(
+                    Path, text, 'seperator expected', len(text) - len(text_))
+                break
+            text__ = text_.lstrip(self.seperator).lstrip() #
+            node = self.NodeClass()
+            try:
+                pos = node.parse(text__, full=False)
+            except YPathSyntaxError as e:
+                exception = e
+                break
+            else:
+                nodes.append(node)
+                text_ = text__[pos:].lstrip()
+
+        if not nodes:
+            raise YPathSyntaxError(Path, text, 'node expected', len(text) - len(text_))
+        if full and text_:
+            if exception is None:
+                raise YPathSyntaxError(Path, text, 'unexpected token', len(text) - len(text_))
+            else:
+                raise exception
+
+        self.nodes = tuple(nodes)
+        return len(text) - len(text_)
+
+    def access(self, mapping:'Mapping[str, Any]')->'Any':
+        r"""acess the item specified by this path in a mapping object"""
+
+        ret = mapping
+        for node in self.nodes:
+            ret = node.access(ret)
+        return ret
+
+    def collect(self, mapping:'Mapping[str, Any]',
+                with_name:bool=False)->'Sequence[Any]':
+        r"""collect all items matches this path in a mapping object"""
+
+        ret = [mapping]
+        for node in self.nodes[:-1]:
+            ret = sum((node.collect(i) for i in ret), [])
+        if with_name:
+            ret = sum((self.nodes[-1].collect(i, with_name=with_name) for i in ret), [])
+        else:
+            ret = sum((self.nodes[-1].collect(i) for i in ret), [])
+        return ret
 
 
 # @inherit_docs
@@ -166,91 +246,15 @@ class NodeWithPredicates(Node):
         return [{self.name: r} for r in ret] if with_name else ret
 
 
-class Path(object):
-    r"""predicate_path: a hierarchy of 'NodeWithPredicates's"""
-
-    NodeClass :type = NodeWithPredicates
-
-    nodes     :'Sequence[NodeClass]'
-    seperator :str
-
-    def __init__(self,
-                 seperator:str='/'):
-        self.seperator = seperator
-
-    def __repr__(self)->str:
-        nodes = ', '.join(map(str, self.nodes))
-        return f'<Path seperated with {self.seperator} {nodes}>'
-
-    def __iter__(self)->'Iterator':
-        return iter(self.nodes)
-
-    def __getitem__(self, i:int)->Node:
-        return self.nodes[i]
-
-    def parse(self, text:str,
-              full:bool=True)->int:
-        r"""parse from text fully or partially from head"""
-
-        text_ = text
-        nodes = []
-        exception = None
-        while True:
-            if not text_:
-                break
-            text__ = text_.lstrip(self.seperator).lstrip() # buggy
-            node = self.NodeClass()
-            try:
-                pos = node.parse(text__, full=False)
-            except YPathSyntaxError as e:
-                exception = e
-                break
-            else:
-                nodes.append(node)
-                text_ = text__[pos:].lstrip()
-
-        if not nodes:
-            raise YPathSyntaxError(Path, text, 'node expected', len(text) - len(text_))
-        if full and text_:
-            if exception is None:
-                raise YPathSyntaxError(Path, text, 'unexpected token', len(text) - len(text_))
-            else:
-                raise exception
-
-        self.nodes = tuple(nodes)
-        return len(text) - len(text_)
-
-    def access(self, mapping:'Mapping[str, Any]')->'Any':
-        r"""acess the item specified by this path in a mapping object"""
-
-        ret = mapping
-        for node in self.nodes:
-            ret = node.access(ret)
-        return ret
-
-    def collect(self, mapping:'Mapping[str, Any]',
-                with_name:bool=False)->'Sequence[Any]':
-        r"""collect all items matches this path in a mapping object"""
-
-        ret = [mapping]
-        for node in self.nodes[:-1]:
-            ret = sum((node.collect(i) for i in ret), [])
-        if with_name:
-            ret = sum((self.nodes[-1].collect(i, with_name=with_name) for i in ret), [])
-        else:
-            ret = sum((self.nodes[-1].collect(i) for i in ret), [])
-        return ret
-
-
 class NodeGroup(object):
-    r"""node_group: single 'Node' or a group of 'YPath's"""
+    r"""node_group: single 'Node' or a group of 'Path's / 'YPath's"""
 
     NODES_BEGIN     :str = r'{'
     NODES_END       :str = r'}'
     NODES_DELIMITER :str = r','
 
     NodeClass: type = NodeWithPredicates
-    PathClass: type = 'YPath'
+    PathClass: type = Path # placeholder, will be overrided later
 
     nodes :'Sequence[NodeWithPredicates]'
 
@@ -261,7 +265,7 @@ class NodeGroup(object):
     def __iter__(self)->'Iterator':
         return iter(self.nodes)
 
-    def __getitem__(self, i:int)->Node:
+    def __getitem__(self, i:int)->'Union[NodeClass, PathClass]':
         return self.nodes[i]
 
     def parse(self, text:str,
@@ -388,14 +392,17 @@ class MatchAttrPredicate(Predicate):
     r"""test if a 'Node' whose field matches target"""
 
     OPERATORS    :'Mapping[str, Callable[[Any, Any], bool]]' = {
+        # dict is ordered
+        # 2 characters
         '==': lambda a, b: a == b,
         '!=': lambda a, b: a != b,
         '<>': lambda a, b: a != b,
-        '>' : lambda a, b: a > b,
-        '<' : lambda a, b: a < b,
         '>=': lambda a, b: a >= b,
         '<=': lambda a, b: a <= b,
         '~=': lambda a, b: b in a,
+        # 1 character
+        '>' : lambda a, b: a > b,
+        '<' : lambda a, b: a < b,
     }
     REGEX_TARGET :'re.Pattern'                               = re.compile(r'\w+')
 
@@ -481,6 +488,15 @@ if __name__ == '__main__':
     print(node, node.access({'node': [1, 2, 3]}), node.collect({'nonode': 1}))
     node.parse('node@-1')
     print(node, node.access({'node': [1, 2, 3]}), node.collect({'node': 1}))
+
+    for text in ('1node', 'node@', 'node@first'):
+        try:
+            node.parse(text)
+        except YPathSyntaxError as e:
+            print(e)
+        else:
+            raise AssertionError('unexpected success')
+
     path = Path()
     path.parse('a')
     print(path)
@@ -490,6 +506,15 @@ if __name__ == '__main__':
     print(path)
     print(path.access({'a': {'b': [{'c': [{'d': 0}, {'d': 1}]}]}}))
     print(path.collect({'a': {'b': [{'c': [{'d': 0}, {'d': 1}]}]}}, with_name=True))
+
+    for text in ('//', 'a/b@/c', 'a/b.c'):
+        try:
+            path.parse(text)
+        except YPathSyntaxError as e:
+            print(e)
+        else:
+            raise AssertionError('unexpected success')
+
     node = NodeWithPredicates()
     node.parse('node(has_field)')
     print(node)
@@ -503,22 +528,35 @@ if __name__ == '__main__':
     print(node.collect({'node': {'x': 1}}), node.collect({'node': {'x': 2}}))
     print(node.collect({'node': [1, 2, 3]}))
     print(node.collect({'node': [{'x': 1}, {'x': 2}]}))
+
+    for text in ('1a', 'a@', 'a@b', 'a(', 'a)', 'a(()', 'a(b', 'a@(b)', 'a@0(b@)'):
+        try:
+            node.parse(text)
+        except YPathSyntaxError as e:
+            print(e)
+        else:
+            raise AssertionError('unexpected success')
+
     group = NodeGroup()
     group.parse('{node(x==1), node(x>1)}')
     print(group.collect({'node': [{'x': 1}, {'x': 2}]}))
+
+    for text in ('1a', 'a@', 'a@b', 'a{', '{a', 'a}', '{a, 1}', '{{}', '{a/b, a.b}'):
+        try:
+            group.parse(text)
+        except YPathSyntaxError as e:
+            print(e)
+        else:
+            raise AssertionError('unexpected success')
+
     path = YPath()
-    path.parse('/{/proxy/node(x==1), node(x>1)}')
+    path.parse('/{/proxy/node(x==1), node(x>=1)}')
     print(path.collect({'proxy': {'node': {'x': 1}}, 'node': {'x': 2}}))
 
-    try:
-        path.parse('/a/')
-    except YPathSyntaxError as e:
-        print(e)
-    else:
-        raise AssertionError('unexpected success')
-    try:
-        path.parse('a/b{x,y/z}')
-    except YPathSyntaxError as e:
-        print(e)
-    else:
-        raise AssertionError('unexpected success')
+    for text in ('/a/', 'a/b{x,y/z}'):
+        try:
+            path.parse(text)
+        except YPathSyntaxError as e:
+            print(e)
+        else:
+            raise AssertionError('unexpected success')

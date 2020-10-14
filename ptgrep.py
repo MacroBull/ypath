@@ -34,7 +34,7 @@ YPath syntax:
     node_group     ::= <single_node> | {<ypath>,<ypath>...}
     single_node    ::= <node>[(<predicate>|<predicate>...)]
     predicate      ::= [!]<predicate_path> | <predicate_path> <operator> <target>
-    predicate_path ::= [.]<single_node>[.<single_node>.<single_node>...]
+    predicate_path ::= [.]<node>[.<node>.<node>...]
     node           ::= <field_name>[@<index>]
     operator       ::= == | != | <> | > | < | >= | <= | ~=
     field_name     ::= (any valid ProtoBuffer field name)
@@ -77,67 +77,73 @@ YPath syntax:
     }
     key = 'parsing YPath'
     timings[key][0] = time.time()
-    path.parse(args.path)
+    path.parse(args.path.strip())
     timings[key][1] = time.time()
     logger.debug('path:\n\t%s', path)
     for key, (t0, t1) in timings.items():
         logger.debug('timing - %s: %.3fms', key, (t1 - t0) * 1e3)
 
-    if args.debug:
-        timings = {
-            'last': None,
-            'print': None,
-            'split prototxt': [0, 0],
-            'parsing prototxt': [0, 0],
-            'filter YPath': [0, 0],
-        }
-        timings['print'] = timings['last'] = time.time()
+    timings = {
+        'last': None,
+        'print': None,
+        'split prototxt': [0, 0],
+        'parsing prototxt': [0, 0],
+        'filter YPath': [0, 0],
+        'serialize prototxt': [0, 0],
+    }
+
+    def _add_measurement(key):
+        if not args.debug:
+            return
+
+        tn, tl = time.time(), timings['last']
+        timings['last'] = tn
+        timings[key][0] += tn - tl
+        timings[key][1] += 1
+
+    def _report_timings():
+        if not args.debug:
+            return
+
+        tp = time.time()
+        if tp - timings['print'] > 2:  # every 2 seconds
+            timings['print'] = tp
+            for key, value in timings.items():
+                if isinstance(value, list):
+                    t, c = value
+                    value[0] = value[1] = 0
+                    logger.debug('timing - %s: %.3fms (%d samples)',
+                                 key, t * 1e3 / c, c)
+            logger.debug('timing ' + delimiter.rstrip())
+        timings['last'] = time.time()
+
+    timings['print'] = timings['last'] = time.time()
     for block in stream:
-        if args.debug:
-            key = 'split prototxt'
-            tn, tl = time.time(), timings['last']
-            timings['last'] = tn
-            timings[key][0] += tn - tl
-            timings[key][1] += 1
+        _add_measurement('split prototxt')
 
         try:
             root = load_prototxt(block)
         except yaml.parser.ParserError:
             continue
         else:
-            if args.debug:
-                key = 'parsing prototxt'
-                tn, tl = time.time(), timings['last']
-                timings['last'] = tn
-                timings[key][0] += tn - tl
-                timings[key][1] += 1
+            _add_measurement('parsing prototxt')
 
             if root is None or not isinstance(root, dict): # shortcut
                 continue
 
             results = path.collect(root, with_name=True)
 
-            if args.debug:
-                key = 'filter YPath'
-                tn, tl = time.time(), timings['last']
-                timings['last'] = tn
-                timings[key][0] += tn - tl
-                timings[key][1] += 1
+            _add_measurement('filter YPath')
 
             for result in results:
                 sys.stdout.write(dump_prototxt(result))
                 sys.stdout.write(delimiter)
+
+            _add_measurement('serialize prototxt')
+
             sys.stdout.flush()
 
-            if args.debug and tn - timings['print'] > 2:  # every 2 seconds
-                timings['print'] = tn
-                for key, value in timings.items():
-                    if isinstance(value, list):
-                        t, c = value
-                        timings[key] = [0, 0]
-                        logger.debug('timing - %s: %.3fms (%d samples)',
-                                     key, t * 1e3 / c, c)
-                logger.debug('timing ' + delimiter.rstrip())
+            _report_timings()
 
 
 if __name__ == '__main__':
